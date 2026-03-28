@@ -1,4 +1,5 @@
 "use client";
+import { signIn } from "next-auth/react";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -157,18 +158,53 @@ export default function SignUpPage() {
     if (!form.agreedKYC) return "Please acknowledge the KYC requirement.";
     return null;
   }
+async function handleSubmit(e: React.FormEvent) {
+  e.preventDefault();
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const err = validate();
-    if (err) { setError(err); return; }
-
-    setLoading(true);
-    // Simulate API registration — replace with your real API call
-    await new Promise((r) => setTimeout(r, 1500));
-    setLoading(false);
-    setStep("verify");
+  const err = validate();
+  if (err) {
+    setError(err);
+    return;
   }
+
+  try {
+    setLoading(true);
+    setError("");
+
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fullName: form.fullName,
+        email: form.email,
+        phone: form.phone,
+        password: form.password,
+        referralCode: form.referralCode,
+        agreedTerms: form.agreedTerms,
+        agreedKYC: form.agreedKYC,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    console.log("REGISTER RESPONSE:", data);
+
+    if (!res.ok) {
+      setError(data.message || "Failed to create account.");
+      return;
+    }
+
+    router.push("/auth/sign-in");
+  } catch (error) {
+    console.error("SIGNUP_FETCH_ERROR:", error);
+    setError("Something went wrong. Please try again.");
+  } finally {
+    setLoading(false);
+  }
+}
+
 
   async function handleVerify(e: React.FormEvent) {
     e.preventDefault();

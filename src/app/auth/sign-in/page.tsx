@@ -1,7 +1,8 @@
 "use client";
+import { useRouter, useSearchParams } from "next/navigation";
+import { signIn } from "next-auth/react";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Eye,
@@ -17,6 +18,8 @@ import { cn } from "@/lib/utils";
 
 // ── Animated background grid dots ─────────────────────────────────────────────
 function GridBackground() {
+  
+
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
       {/* Dark base */}
@@ -76,6 +79,8 @@ function StatsTicker() {
 }
 
 export default function SignInPage() {
+  const searchParams = useSearchParams();
+const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
   const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -89,44 +94,45 @@ export default function SignInPage() {
     setError("");
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
+ async function handleSubmit(e: React.FormEvent) {
+  e.preventDefault();
+  setError("");
 
-    if (!form.email || !form.password) {
-      setError("Please fill in all fields.");
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-      setError("Please enter a valid email address.");
-      return;
-    }
-    if (form.password.length < 6) {
-      setError("Password must be at least 6 characters.");
-      return;
-    }
-
-    setLoading(true);
-
-    // Simulate auth — replace with your real API call e.g. NextAuth signIn()
-    await new Promise((r) => setTimeout(r, 1500));
-
-    // Simulate 2FA prompt for demo (toggle based on your backend response)
-    if (!twoFA) {
-      setTwoFA(true);
-      setLoading(false);
-      return;
-    }
-
-    if (twoFACode.length !== 6) {
-      setError("Please enter your 6-digit 2FA code.");
-      setLoading(false);
-      return;
-    }
-
-    setLoading(false);
-    router.push("/dashboard");
+  if (!form.email || !form.password) {
+    setError("Please fill in all fields.");
+    return;
   }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+    setError("Please enter a valid email address.");
+    return;
+  }
+
+  if (form.password.length < 6) {
+    setError("Password must be at least 6 characters.");
+    return;
+  }
+
+  setLoading(true);
+
+  const result = await signIn("credentials", {
+    email: form.email,
+    password: form.password,
+    redirect: false,
+    callbackUrl,
+  });
+
+  setLoading(false);
+
+  if (result?.error) {
+    setError("Invalid email or password.");
+    return;
+  }
+
+  router.push(result?.url || callbackUrl);
+  router.refresh();
+}
+
 
   return (
     <div className="min-h-screen flex flex-col relative">
