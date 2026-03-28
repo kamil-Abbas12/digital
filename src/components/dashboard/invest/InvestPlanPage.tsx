@@ -13,6 +13,8 @@ import {
   Loader2,
   TrendingUp,
   Info,
+  ExternalLink,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -241,10 +243,97 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
   const [agreed, setAgreed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [amountError, setAmountError] = useState("");
+  const [txVerifying, setTxVerifying] = useState(false);
+  const [txVerified, setTxVerified] = useState(false);
+  const [txError, setTxError] = useState("");
+  const [txData, setTxData] = useState<{ from: string; amount: string; time: string } | null>(null);
 
   const numAmount = parseFloat(amount) || 0;
   const serviceFee = numAmount * SERVICE_FEE_RATE;
   const totalPayable = numAmount + serviceFee;
+
+  // TRC20: 64 hex chars. BEP20: 0x + 64 hex chars
+  const TRC20_REGEX = /^[0-9a-fA-F]{64}$/;
+  const BEP20_REGEX = /^0x[0-9a-fA-F]{64}$/;
+
+  function isValidFormat(hash: string): boolean {
+    if (network === "TRC20") return TRC20_REGEX.test(hash.trim());
+    return BEP20_REGEX.test(hash.trim());
+  }
+
+  async function verifyTxHash() {
+    const hash = txHash.trim();
+    if (!hash) { setTxError("Please enter a transaction hash."); return; }
+    if (!isValidFormat(hash)) {
+      setTxError(
+        network === "TRC20"
+          ? "Invalid TRC20 TxID — must be 64 hex characters."
+          : "Invalid BEP20 TxID — must start with 0x followed by 64 hex characters."
+      );
+      return;
+    }
+
+    setTxVerifying(true);
+    setTxVerified(false);
+    setTxError("");
+    setTxData(null);
+
+    try {
+      if (network === "TRC20") {
+        // Tronscan public API — no key required
+        const res = await fetch(
+          `https://apilist.tronscanapi.com/api/transaction-info?hash=${hash}`
+        );
+        const data = await res.json();
+
+        if (!data || data.contractRet === undefined) {
+          throw new Error("Transaction not found on Tron blockchain.");
+        }
+        if (data.contractRet !== "SUCCESS") {
+          throw new Error(`Transaction failed on-chain (status: ${data.contractRet}).`);
+        }
+
+        setTxData({
+          from: data.ownerAddress ? `${data.ownerAddress.slice(0, 10)}...${data.ownerAddress.slice(-6)}` : "Unknown",
+          amount: data.amount ? `${(data.amount / 1_000_000).toFixed(2)} TRX` : "N/A",
+          time: data.timestamp ? new Date(data.timestamp).toLocaleString() : "N/A",
+        });
+        setTxVerified(true);
+      } else {
+        // BscScan public API — free tier, no key needed for basic tx lookup
+        const res = await fetch(
+          `https://api.bscscan.com/api?module=transaction&action=gettxreceiptstatus&txhash=${hash}&apikey=YourApiKeyToken`
+        );
+        const data = await res.json();
+
+        if (data.status === "0" && data.message === "No transactions found") {
+          throw new Error("Transaction not found on BSC blockchain.");
+        }
+        if (data.result?.status === "0") {
+          throw new Error("Transaction failed on-chain.");
+        }
+
+        // Also fetch tx details
+        const detailRes = await fetch(
+          `https://api.bscscan.com/api?module=proxy&action=eth_getTransactionByHash&txhash=${hash}&apikey=YourApiKeyToken`
+        );
+        const detail = await detailRes.json();
+        const tx = detail.result;
+
+        setTxData({
+          from: tx?.from ? `${tx.from.slice(0, 10)}...${tx.from.slice(-6)}` : "Unknown",
+          amount: tx?.value ? `${(parseInt(tx.value, 16) / 1e18).toFixed(6)} BNB` : "N/A",
+          time: "Confirmed",
+        });
+        setTxVerified(true);
+      }
+    } catch (err: any) {
+      setTxError(err.message || "Could not verify transaction. Please check your TxID and network.");
+      setTxVerified(false);
+    } finally {
+      setTxVerifying(false);
+    }
+  }
 
   function validateAmount() {
     if (!numAmount || numAmount < plan.minAmount) {
@@ -261,7 +350,10 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
   }
 
   function goToConfirm() {
-    if (!txHash.trim()) return;
+    if (!txVerified) {
+      setTxError("Please verify your transaction hash before proceeding.");
+      return;
+    }
     setStep("confirm");
   }
 
@@ -406,6 +498,7 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
               wallet address below.
             </p>
 
+            {/* Network selector */}
             <div className="mb-6">
               <label className="block text-sm font-semibold text-slate-700 mb-2">
                 Select Network
@@ -414,7 +507,13 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
                 {(["TRC20", "BEP20"] as Network[]).map((net) => (
                   <button
                     key={net}
-                    onClick={() => setNetwork(net)}
+                    onClick={() => {
+                      setNetwork(net);
+                      setTxVerified(false);
+                      setTxError("");
+                      setTxData(null);
+                      setTxHash("");
+                    }}
                     className={cn(
                       "py-3 rounded-xl border-2 font-semibold text-sm transition-all",
                       network === net
@@ -428,6 +527,7 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
               </div>
             </div>
 
+            {/* Wallet address */}
             <div className="mb-6">
               <label className="block text-sm font-semibold text-slate-700 mb-2">
                 Company Wallet Address ({network})
@@ -444,6 +544,7 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
               </p>
             </div>
 
+            {/* Amount summary */}
             <div className="rounded-xl bg-brand/5 border border-brand/20 p-4 mb-6 space-y-1.5 text-sm">
               <div className="flex justify-between text-slate-600">
                 <span>Investment</span>
@@ -459,20 +560,133 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
               </div>
             </div>
 
+            {/* TxID input + live verification */}
             <div className="mb-6">
               <label className="block text-sm font-semibold text-slate-700 mb-2">
                 Transaction Hash / TxID
               </label>
-              <input
-                type="text"
-                value={txHash}
-                onChange={(e) => setTxHash(e.target.value)}
-                placeholder="Paste your transaction hash here..."
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 transition-all placeholder:text-slate-300"
-              />
-              <p className="text-xs text-slate-400 mt-1.5">
-                After sending, paste the TxID from your Binance / wallet app.
-              </p>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={txHash}
+                  onChange={(e) => {
+                    setTxHash(e.target.value);
+                    setTxVerified(false);
+                    setTxError("");
+                    setTxData(null);
+                  }}
+                  placeholder={
+                    network === "TRC20"
+                      ? "e.g. a1b2c3d4e5f6... (64 hex chars)"
+                      : "e.g. 0xa1b2c3d4... (0x + 64 hex chars)"
+                  }
+                  className={cn(
+                    "flex-1 px-4 py-3 rounded-xl border text-slate-900 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand/30 transition-all placeholder:text-slate-300 placeholder:font-sans",
+                    txError
+                      ? "border-rose-300 bg-rose-50"
+                      : txVerified
+                      ? "border-emerald-300 bg-emerald-50"
+                      : "border-slate-200 bg-slate-50"
+                  )}
+                />
+                <button
+                  onClick={verifyTxHash}
+                  disabled={txVerifying || !txHash.trim()}
+                  className="shrink-0 px-4 py-3 rounded-xl bg-slate-900 hover:bg-brand text-white text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  {txVerifying ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4" />
+                  )}
+                  {txVerifying ? "Checking…" : "Verify"}
+                </button>
+              </div>
+
+              {/* Format hint */}
+              {!txVerified && !txError && (
+                <p className="text-xs text-slate-400 mt-1.5">
+                  {network === "TRC20"
+                    ? "TRC20 TxID: 64 hexadecimal characters (no 0x prefix)"
+                    : "BEP20 TxID: starts with 0x followed by 64 hex characters"}
+                  {" · "}
+                  <a
+                    href={
+                      network === "TRC20"
+                        ? "https://tronscan.org"
+                        : "https://bscscan.com"
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-brand hover:underline inline-flex items-center gap-0.5"
+                  >
+                    Find on {network === "TRC20" ? "Tronscan" : "BscScan"}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </p>
+              )}
+
+              {/* Error state */}
+              {txError && (
+                <div className="mt-2 rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 flex items-start gap-2">
+                  <XCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-rose-700">Verification Failed</p>
+                    <p className="text-xs text-rose-600 mt-0.5">{txError}</p>
+                    <a
+                      href={
+                        network === "TRC20"
+                          ? `https://tronscan.org/#/transaction/${txHash.trim()}`
+                          : `https://bscscan.com/tx/${txHash.trim()}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-rose-500 hover:text-rose-700 underline inline-flex items-center gap-0.5 mt-1"
+                    >
+                      Check manually on {network === "TRC20" ? "Tronscan" : "BscScan"}
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                </div>
+              )}
+
+              {/* Success state */}
+              {txVerified && txData && (
+                <div className="mt-2 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                    <p className="text-sm font-semibold text-emerald-700">Transaction Verified ✓</p>
+                  </div>
+                  <div className="space-y-1 text-xs text-emerald-700">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-600">From</span>
+                      <span className="font-mono font-semibold">{txData.from}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-emerald-600">Amount</span>
+                      <span className="font-semibold">{txData.amount}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-emerald-600">Time</span>
+                      <span className="font-semibold">{txData.time}</span>
+                    </div>
+                  </div>
+                  <a
+                    href={
+                      network === "TRC20"
+                        ? `https://tronscan.org/#/transaction/${txHash.trim()}`
+                        : `https://bscscan.com/tx/${txHash.trim()}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 text-xs text-emerald-600 hover:text-emerald-800 underline inline-flex items-center gap-0.5"
+                  >
+                    View on {network === "TRC20" ? "Tronscan" : "BscScan"}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3">
@@ -484,7 +698,7 @@ function InvestPlanContent({ plan }: { plan: Plan }) {
               </button>
               <button
                 onClick={goToConfirm}
-                disabled={!txHash.trim()}
+                disabled={!txVerified}
                 className="flex-1 py-3 bg-slate-900 hover:bg-brand text-white font-semibold rounded-2xl transition-all duration-300 hover:shadow-btn disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 Next: Review <ArrowRight className="w-4 h-4" />
